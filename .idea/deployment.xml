@@ -1,11 +1,18 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PublishConfigData" autoUpload="Always" serverName="wus2@crow.cs.umanitoba.ca:22">
+  <component name="PublishConfigData" autoUpload="Always" serverName="wus2@woodpecker.cs.umanitoba.ca:22 password">
     <serverData>
       <paths name="wus2@crow.cs.umanitoba.ca:22">
         <serverdata>
           <mappings>
             <mapping deploy="/tmp/pycharm_project_847" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="wus2@woodpecker.cs.umanitoba.ca:22 password">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/tmp/pycharm_project_133" local="$PROJECT_DIR$" />
           </mappings>
         </serverdata>
       </paths>
