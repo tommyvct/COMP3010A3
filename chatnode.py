@@ -1,38 +1,27 @@
-# from https://github.com/jstasiak/python-zeroconf/blob/master/examples/browser.py
 import json
 import sys
-
-try:
-    from zeroconf import ServiceBrowser, Zeroconf, ServiceListener, ServiceInfo
-except ModuleNotFoundError:
-    sys.path.append('/home/student/wus2/.local/lib/python3.6/site-packages')
-    from zeroconf import ServiceBrowser, Zeroconf, ServiceListener, ServiceInfo
-
+from zeroconf import ServiceBrowser, Zeroconf, ServiceListener, ServiceInfo
 import select
 import socket
 from datetime import datetime
 
+
 NODE_PORT = 25070
 CLIENT_PORT = 26070
-PING_EVERY = 5.0
-FAIL_AFTER = 120.0
-NODE_SELECT_TIMEOUT = 1
-CLIENT_SELECT_TIMEOUT = 1
+PING_EVERY = 5.0  # seconds
+FAIL_AFTER = 120.0  # seconds
+NODE_SELECT_TIMEOUT = 1  # in seconds
+CLIENT_SELECT_TIMEOUT = 1  # in seconds
 SERVICE_NAME = "Tommy's PROFESSIONAL trouble maker"
 LAST_MESSAGE_SIZE = 5
 
-node_list = {}  # { server_name : [ip_port_tuple, time_last_heard, socket_to_node] }
-reverse_node_list = {}  # { str(ip_port_tuple) : servername }
 
-zeroconf = Zeroconf()
-
-telnet_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-telnet_server.setblocking(0)
-telnet_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-telnet_server.bind((socket.gethostbyname(socket.gethostname()), CLIENT_PORT))
-telnet_server.listen(5)
-telnet_sockets_going_in = [telnet_server]
-telnet_sockets_going_out = []
+print(f"Zeroconf service name: {SERVICE_NAME}")
+print(f"Zeroconf port: {NODE_PORT}")
+print(f"Hostname: {socket.gethostname()} -> {socket.gethostbyname(socket.gethostname())}")
+print(f"Telnet client port: {CLIENT_PORT}")
+print(f"To connect, run 'telnet {socket.gethostname()} {CLIENT_PORT}'")
+print()
 
 
 def send_ping(node: list, node_name: str = "") -> None:
@@ -46,7 +35,7 @@ def send_message(name: str, message: str, node: list, node_name: str = "") -> No
     print("I: send " + message_json.replace("\r\n", "\\n") + " to " + node_name)
 
 
-def kick_client(s: socket) -> None:
+def kick_telnet_client(s: socket) -> None:
     try:
         s.close()
         print("I: client kicked")
@@ -66,13 +55,13 @@ class ZeroconfListener:
             del reverse_node_list[ip_port_tuple_str]
 
             del node_list[str(name)]
-        except KeyError:
+        except KeyError:   # already been removed from the list by nothing heard for FAIL_AFTER seconds
             # print(f"E: ZeroconfListener.remove_service() cannot find {name} in survivor list.")
             return
         print(f"I: Service {name} removed @ {ip_port_tuple_str}")
 
     def add_service(self, zeroconf, type, name):
-        if name == (SERVICE_NAME + "._p2pchat._udp.local."):
+        if name == (SERVICE_NAME + "._p2pchat._udp.local."):  # avoid add the server ifself
             return
         service_info = zeroconf.get_service_info(type, name)
         ip_port_tuple = (socket.inet_ntoa(service_info.addresses[0]), service_info.port)
@@ -87,33 +76,48 @@ class ZeroconfListener:
         send_ping(node_list[str(name)], str(name))
 
 
-#  discover via zeroconf
-# browser =
-# noinspection PyTypeChecker
-ServiceBrowser(zeroconf, "_p2pchat._udp.local.", ZeroconfListener())
-
-# publish over zeroconf
-zeroconf.register_service(ServiceInfo(
-    "_p2pchat._udp.local.",
-    SERVICE_NAME + "._p2pchat._udp.local.",
-    addresses=[socket.inet_aton(socket.gethostbyname(socket.gethostname()))],
-    port=NODE_PORT,
-    properties={},
-))
-
-ping_time = datetime.now()
-last_messages = []
-telnet_in_message_buffer = []
-
 try:
-    while True:
-        failed_node = []
-        node_socket_list = []
+    node_list = {}  # { server_name : [ip_port_tuple, time_last_heard, socket_to_node] }
+    reverse_node_list = {}  # { str(ip_port_tuple) : servername }
+
+
+    telnet_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    telnet_server.setblocking(False)
+    telnet_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    telnet_server.bind((socket.gethostbyname(socket.gethostname()), CLIENT_PORT))
+    telnet_server.listen(5)
+    telnet_sockets_going_in = [telnet_server]
+    telnet_sockets_going_out = []
+
+    zeroconf = Zeroconf()
+
+    # discover via zeroconf
+    ServiceBrowser(zeroconf, "_p2pchat._udp.local.", ZeroconfListener())
+
+    # publish over zeroconf
+    zeroconf.register_service(ServiceInfo(
+        "_p2pchat._udp.local.",
+        SERVICE_NAME + "._p2pchat._udp.local.",
+        addresses=[socket.inet_aton(socket.gethostbyname(socket.gethostname()))],
+        port=NODE_PORT,
+        properties={},
+    ))
+
+
+    ping_time = datetime.now()  # ping timer
+    last_messages = []  # store LAST_MESSAGE_SIZE amount of messages, to avoid the funny loop
+    telnet_in_message_buffer = []  # buffer for forwarding messages from telnet clients to all discoverd nodes
+
+    while True:  # main loop
+        failed_node = []   # list of failed nodes
+        node_socket_list = []   # list of sockets of active nodes
         current_time = datetime.now()
-        telnet_out_message_buffer = []
+        telnet_out_message_buffer = []  # bugger for forwarding messages from nodes to telnet clients
+
 
         if len(last_messages) >= LAST_MESSAGE_SIZE:
             last_messages.clear()
+
 
         for node_name, node in node_list.copy().items():
             node_ip_port_tuple = node[0]
@@ -123,27 +127,24 @@ try:
             if abs((current_time - node_time_last_heard).total_seconds()) > FAIL_AFTER:
                 failed_node.append(node_name)
             else:
-                # node[2].setblocking(False)
                 node_socket_list.append(node[2])
 
-            # ping back every 60s
 
+        # ping back every 60s
         if abs((current_time - ping_time).total_seconds()) > PING_EVERY:
             ping_time = datetime.now()
             for node_name, node in node_list.copy().items():
                 send_ping(node_list[node_name], node_name)
 
+
+        # from telnet client to nodes
         for node_name, node in node_list.copy().items():
             for message in telnet_in_message_buffer:
                 message = message.decode("UTF-8").split('>', 1)
                 send_message(message[0], message[1], node_list[node_name], node_name)
 
-        # for message in telnet_in_message_buffer:
-        #     message = message.decode("UTF-8").split('>', 1)
-        #     send_message(source, message[0], message[1])
 
-
-        try:
+        try:  # read from nodes
             readable = select.select(node_socket_list, [], [], NODE_SELECT_TIMEOUT)[0]
 
             for source in readable:
@@ -181,8 +182,11 @@ try:
             # print("E: A node went down right after it's last response")
             pass
 
+
         telnet_in_message_buffer.clear()
 
+
+        # communicate with telnet clients
         readable, writable, execptional = select.select(telnet_sockets_going_in, telnet_sockets_going_out,
                                                         telnet_sockets_going_in, CLIENT_SELECT_TIMEOUT)
 
@@ -198,21 +202,21 @@ try:
                 data = s.recv(1024)
                 if data:
                     try:
-                        if data.decode("UTF-8") == "exit\r\n":
+                        if data.decode("UTF-8") == "exit\r\n":  # client wanna get out
                             s.sendall(b"Bye!\r\n")
-                            kick_client(s)
+                            kick_telnet_client(s)
                         elif not data.decode("UTF-8").find('>') == -1:
                             telnet_out_message_buffer.append(data)  # echo back the message
                             telnet_in_message_buffer.append(data)
                         else:
                             s.sendall(b"You didn't write your name!\r\n")
                     except UnicodeDecodeError: # Ctrl-Z, Ctrl-C, I don't know how to handle it so just kick him out
-                        kick_client(s)
+                        kick_telnet_client(s)
                 else:
                     print("I: someone crashed!")
-                    kick_client(s)
+                    kick_telnet_client(s)
 
-        try:
+        try:  # forward messages from nodes to telnet clients
             for s in writable:
                 for message in telnet_out_message_buffer:
                     s.sendall(message)
@@ -221,9 +225,9 @@ try:
 
         telnet_out_message_buffer.clear()
 
-        for s in execptional:
+        for s in execptional:  # the telnet client escaped then Ctrl-C
             print("I: someone crashed!")
-            kick_client(s)
+            kick_telnet_client(s)
 
         # clean failed node
         if not len(failed_node) == 0:
@@ -234,7 +238,7 @@ try:
                 del node_list[node_name]
                 # print(node_list)
 
-except KeyboardInterrupt as e:
+except KeyboardInterrupt as e: # Shutdown the server
     print(e)
     exit(0)
 
@@ -253,3 +257,5 @@ finally:
         s.close()
 
     telnet_server.close()
+
+telnet_server.close()
